@@ -8,14 +8,8 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-            dir: musl
-          - os: ubuntu-24.04
-            target: aarch64-unknown-linux-musl
-            dir: musl-arm64
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            dir: gnu
+            target: armv7-unknown-linux-musleabihf
+            dir: armv7
 
     runs-on: ${{ matrix.os }}
 
@@ -23,9 +17,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install musl-tools (Linux)
-        if: ${{ matrix.dir == 'musl' }}
-        run: sudo apt-get install -y musl-tools
+      - name: Install musl-tools and UPX
+        run: sudo apt-get update && sudo apt-get install -y musl-tools upx-ucl
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -35,7 +28,6 @@ jobs:
           override: true
           target: ${{ matrix.target }}
 
-      # Add Rust cache
       - name: Cache Rust dependencies
         uses: actions/cache@v3
         with:
@@ -47,38 +39,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
-      - name: Install cross (only for arm64)
-        if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+      - name: Install cross
         run: cargo install cross --locked
 
       - name: Build client
         run: |
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            cross build --locked --release --target "${{ matrix.target }}" --manifest-path binaries/geph5-client/Cargo.toml
-          else
-            cargo build --locked --release --target "${{ matrix.target }}" --manifest-path binaries/geph5-client/Cargo.toml
-          fi
+          cross build --locked --release --target "${{ matrix.target }}" --manifest-path binaries/geph5-client/Cargo.toml
+
+      - name: Compress client binary with UPX
+        run: |
+          upx --best target/${{ matrix.target }}/release/geph5-client
 
       - name: Move client binaries to artifacts directory
         shell: bash
         run: |
           mkdir -p artifacts/${{ matrix.dir }}
           mv target/${{ matrix.target }}/release/geph5-client artifacts/${{ matrix.dir }}/
-
-      # Cache cargo-bundle to avoid reinstalling
-      - name: Cache cargo-bundle
-        if: matrix.os == 'macos-latest'
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/bin/cargo-bundle
-          key: ${{ runner.os }}-cargo-bundle-0.6.0
-
-      - name: Install cargo-bundle
-        if: matrix.os == 'macos-latest'
-        run: |
-          if [ ! -f ~/.cargo/bin/cargo-bundle ]; then
-            cargo install cargo-bundle --locked --version "=0.6.0" --force
-          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -94,8 +70,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install musl-tools
-        run: sudo apt-get install -y musl-tools
+      - name: Install musl-tools and UPX
+        run: sudo apt-get update && sudo apt-get install -y musl-tools upx-ucl
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -103,9 +79,8 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
-          target: x86_64-unknown-linux-musl
+          target: armv7-unknown-linux-musleabihf
 
-      # Add Rust cache for bridge-exit job
       - name: Cache Rust dependencies
         uses: actions/cache@v3
         with:
@@ -117,28 +92,33 @@ jobs:
           restore-keys: |
             bridge-exit-ubuntu-24.04-musl-cargo-
 
-      - name: Set default host
-        shell: bash
-        run: rustup set default-host x86_64-unknown-linux-musl
+      - name: Install cross
+        run: cargo install cross --locked
 
-      - name: Build bridge and exit and broker
+      - name: Build bridge, exit, and broker
         run: |
-          cargo build --locked --release --target x86_64-unknown-linux-musl --manifest-path binaries/geph5-bridge/Cargo.toml
-          cargo build --locked --release --target x86_64-unknown-linux-musl --manifest-path binaries/geph5-exit/Cargo.toml
-          cargo build --locked --release --target x86_64-unknown-linux-musl --manifest-path binaries/geph5-broker/Cargo.toml
+          cross build --locked --release --target armv7-unknown-linux-musleabihf --manifest-path binaries/geph5-bridge/Cargo.toml
+          cross build --locked --release --target armv7-unknown-linux-musleabihf --manifest-path binaries/geph5-exit/Cargo.toml
+          cross build --locked --release --target armv7-unknown-linux-musleabihf --manifest-path binaries/geph5-broker/Cargo.toml
 
-      - name: Move bridge and exit binaries to artifacts directory
+      - name: Compress binaries with UPX
         run: |
-          mkdir -p artifacts/musl
-          mv target/x86_64-unknown-linux-musl/release/geph5-bridge artifacts/musl/
-          mv target/x86_64-unknown-linux-musl/release/geph5-broker artifacts/musl/
-          mv target/x86_64-unknown-linux-musl/release/geph5-exit artifacts/musl/
+          upx --best target/armv7-unknown-linux-musleabihf/release/geph5-bridge
+          upx --best target/armv7-unknown-linux-musleabihf/release/geph5-exit
+          upx --best target/armv7-unknown-linux-musleabihf/release/geph5-broker
+
+      - name: Move bridge, exit, and broker binaries to artifacts directory
+        run: |
+          mkdir -p artifacts/armv7
+          mv target/armv7-unknown-linux-musleabihf/release/geph5-bridge artifacts/armv7/
+          mv target/armv7-unknown-linux-musleabihf/release/geph5-exit artifacts/armv7/
+          mv target/armv7-unknown-linux-musleabihf/release/geph5-broker artifacts/armv7/
 
       - name: Upload bridge and exit artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: musl-latest-bridge
-          path: artifacts/musl
+          name: armv7-latest-bridge
+          path: artifacts/armv7
 
   upload:
     if: github.ref == 'refs/heads/master'
@@ -153,10 +133,9 @@ jobs:
 
       - name: Move some stuff
         run: |
-          mv artifacts/musl-latest-bridge/* artifacts/musl-latest/
-          rmdir artifacts/musl-latest-bridge
+          mv artifacts/armv7-latest-bridge/* artifacts/armv7-latest/
+          rmdir artifacts/armv7-latest-bridge
 
-      # Cache rclone installation
       - name: Cache rclone
         uses: actions/cache@v3
         id: cache-rclone
