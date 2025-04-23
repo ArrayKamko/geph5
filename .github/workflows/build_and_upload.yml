@@ -4,74 +4,14 @@ on: [push]
 
 jobs:
   build:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            target: armv7-unknown-linux-musleabihf
-            dir: armv7
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install musl-tools and UPX
-        run: sudo apt-get update && sudo apt-get install -y musl-tools upx-ucl
-
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          target: ${{ matrix.target }}
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
-
-      - name: Install cross
-        run: cargo install cross --locked
-
-      - name: Build client
-        run: |
-          cross build --locked --release --target "${{ matrix.target }}" --manifest-path binaries/geph5-client/Cargo.toml
-
-      - name: Compress client binary with UPX
-        run: |
-          upx --best target/${{ matrix.target }}/release/geph5-client
-
-      - name: Move client binaries to artifacts directory
-        shell: bash
-        run: |
-          mkdir -p artifacts/${{ matrix.dir }}
-          mv target/${{ matrix.target }}/release/geph5-client artifacts/${{ matrix.dir }}/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.dir }}-latest
-          path: artifacts/${{ matrix.dir }}
-
-  build-bridge-exit:
-    name: Build Bridge, Exit, and Broker (Musl)
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install musl-tools and UPX
-        run: sudo apt-get update && sudo apt-get install -y musl-tools upx-ucl
+      - name: Install musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -88,41 +28,39 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: bridge-exit-ubuntu-24.04-musl-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-armv7-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            bridge-exit-ubuntu-24.04-musl-cargo-
+            ${{ runner.os }}-armv7-cargo-
 
       - name: Install cross
         run: cargo install cross --locked
 
-      - name: Build bridge, exit, and broker
-        run: |
-          cross build --locked --release --target armv7-unknown-linux-musleabihf --manifest-path binaries/geph5-bridge/Cargo.toml
-          cross build --locked --release --target armv7-unknown-linux-musleabihf --manifest-path binaries/geph5-exit/Cargo.toml
-          cross build --locked --release --target armv7-unknown-linux-musleabihf --manifest-path binaries/geph5-broker/Cargo.toml
+      - name: Install UPX and binutils
+        run: sudo apt-get update && sudo apt-get install -y upx-ucl binutils
 
-      - name: Compress binaries with UPX
-        run: |
-          upx --best target/armv7-unknown-linux-musleabihf/release/geph5-bridge
-          upx --best target/armv7-unknown-linux-musleabihf/release/geph5-exit
-          upx --best target/armv7-unknown-linux-musleabihf/release/geph5-broker
+      - name: Build client
+        run: cross build --locked --release --target armv7-unknown-linux-musleabihf --manifest-path binaries/geph5-client/Cargo.toml
 
-      - name: Move bridge, exit, and broker binaries to artifacts directory
+      - name: Optimize binary
         run: |
-          mkdir -p artifacts/armv7
-          mv target/armv7-unknown-linux-musleabihf/release/geph5-bridge artifacts/armv7/
-          mv target/armv7-unknown-linux-musleabihf/release/geph5-exit artifacts/armv7/
-          mv target/armv7-unknown-linux-musleabihf/release/geph5-broker artifacts/armv7/
+          strip target/armv7-unknown-linux-musleabihf/release/geph5-client
+          upx --best target/armv7-unknown-linux-musleabihf/release/geph5-client
 
-      - name: Upload bridge and exit artifacts
+      - name: Move client binaries to artifacts directory
+        shell: bash
+        run: |
+          mkdir -p artifacts/musl-armv7
+          mv target/armv7-unknown-linux-musleabihf/release/geph5-client artifacts/musl-armv7/
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: armv7-latest-bridge
-          path: artifacts/armv7
+          name: musl-armv7-latest
+          path: artifacts/musl-armv7
 
   upload:
     if: github.ref == 'refs/heads/master'
-    needs: [build, build-bridge-exit]
+    needs: [build]
     runs-on: ubuntu-24.04
 
     steps:
@@ -130,11 +68,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Move some stuff
-        run: |
-          mv artifacts/armv7-latest-bridge/* artifacts/armv7-latest/
-          rmdir artifacts/armv7-latest-bridge
 
       - name: Cache rclone
         uses: actions/cache@v3
